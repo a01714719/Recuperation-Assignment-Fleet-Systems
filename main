@@ -1,0 +1,80 @@
+// Fleet Systems: Lifecycles & Ownership
+// TC1030.302 - Object-Oriented Programming
+// Sebastian Villegas Olaya
+// Build: g++ -std=c++14 main.cpp -o fleet
+
+#include <iostream>
+#include <string>
+
+// Entity: base class for anything the mission display can track.
+// The destructor is VIRTUAL: Spacecraft objects will be handled through
+// Entity*/Spacecraft* pointers later, and deleting a derived object
+// through a base pointer with a non-virtual destructor is undefined
+// behavior (the derived part would never be destroyed).
+
+class Entity {
+public:
+    explicit Entity(const std::string& id) : id_(id) {
+        std::cout << "[ctor] Entity      " << id_ << "\n";
+    }
+
+    virtual ~Entity() {
+        std::cout << "[dtor] Entity      " << id_ << "\n";
+    }
+
+    // Read-only access to the identifier; the field itself stays private.
+    const std::string& id() const { return id_; }
+
+    // Generic rendering; derived entities can specialize it.
+    virtual void render() const {
+        std::cout << "Tracking entity " << id_ << " on the mission map\n";
+    }
+
+private:
+    std::string id_;
+};
+
+
+// Spacecraft IS-A Entity (inheritance).
+// The mission display can treat any Spacecraft as a generic trackable
+// Entity, so public inheritance models the IS-A relationship.
+
+class Spacecraft : public Entity {
+public:
+    Spacecraft(const std::string& id, int hullIntegrity)
+        : Entity(id),                                    // base subobject is constructed FIRST
+          hullIntegrity_(hullIntegrity) {
+        std::cout << "[ctor] Spacecraft  " << this->id() << "\n";
+    }
+
+    ~Spacecraft() override {
+        std::cout << "[dtor] Spacecraft  " << this->id() << "\n";
+  // After this body runs, ~Entity() runs automatically:
+  // destruction order is the exact reverse of construction.
+    }
+
+    void render() const override {
+        std::cout << "Rendering spacecraft " << id()
+                  << " (hull " << hullIntegrity_ << "%)\n";
+    }
+
+    int hullIntegrity() const { return hullIntegrity_; }
+
+private:
+    int hullIntegrity_;
+};
+
+
+// Demo (will grow into the full mission loop in later commits)
+
+int main() {
+    std::cout << "Fleet Systems: bootstrap\n";
+
+    Spacecraft ship("Aurora-01", 100);
+    ship.render();
+
+    std::cout << "Shutting down\n";
+    return 0;
+// 'ship' goes out of scope here:
+// ~Spacecraft() runs first, then ~Entity() (derived-first destruction).
+}
