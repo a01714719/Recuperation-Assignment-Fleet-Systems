@@ -21,12 +21,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <memory>     // std::unique_ptr, std::make_unique
-#include <stdexcept>  // std::runtime_error
-#include <utility>    // std::move
+#include <memory>     
+#include <stdexcept>  
+#include <utility>    
 
-// Forward declaration: Spacecraft only needs to *point* to a Fleet,
-// so the full definition is not required yet (a pointer is enough).
 class Fleet;
 
 
@@ -210,7 +208,7 @@ private:
 
 //  DockingException derives from std::runtime_error so it carries a message
 //  and is catchable as std::exception at a sensible boundary.
-//
+
 class DockingException : public std::runtime_error {
 public:
     explicit DockingException(const std::string& msg)
@@ -272,7 +270,6 @@ public:
         telemetry_.record("mounted module");
     }
 
-    // Dependency: Maneuver is only a parameter 
     void executeManeuver(const Maneuver& m) {
         std::cout << "  " << id() << " executes maneuver '" << m.name() << "'\n";
         if (!fuel_.consume(m.fuelCost()))
@@ -280,7 +277,6 @@ public:
         telemetry_.record("maneuver: " + m.name());
     }
 
-    // Polymorphic tick: activate whatever module is mounted 
     void tick() const {
         std::cout << "  tick " << id() << ": ";
         if (module_) module_->activate();   
@@ -289,7 +285,7 @@ public:
 
     // PART 5: a risky operation that can throw 
     void dock(int requiredFuel) {
-        // Acquire RAII resource BEFORE the risky check (Part 5 requirement).
+
         std::unique_ptr<DockingClamp> clamp =
             std::make_unique<DockingClamp>(id());
 
@@ -297,12 +293,12 @@ public:
                   << " fuel, has " << fuel_.level() << ")\n";
 
         if (fuel_.level() < requiredFuel) {
-            // Throwing here unwinds the stack: `clamp` is released cleanly.
+            
             throw DockingException(id() + ": insufficient fuel to dock");
         }
         fuel_.consume(requiredFuel);
         std::cout << "  " << id() << " docked successfully\n";
-        // clamp released here on the normal path too.
+
     }
 
 private:
@@ -314,17 +310,7 @@ private:
     int       hullIntegrity_;
 };
 
-
-
 //  PART 4 - Fleet owns its ships through unique_ptr (Rule of 0 container)
-
-
-//  WHY unique_ptr<Spacecraft>:
-//    - raw pointer  : we would have to delete manually and risk leaks/double
-//                     frees on exceptions. unique_ptr frees automatically.
-//    - shared_ptr   : there is exactly ONE owner of each ship (the Fleet), so
-//                     reference counting is wasted overhead. Ownership is
-//                     unique -> unique_ptr expresses the intent exactly.
 
 class Fleet {
 public:
@@ -341,13 +327,12 @@ public:
         ships_.push_back(std::move(ship));      
     }
 
-    // Frees ONLY the matching ship; Fleet + other ships survive.
     void removeShip(const std::string& id) {
         for (auto it = ships_.begin(); it != ships_.end(); ++it) {
             if ((*it)->id() == id) {
                 std::cout << "Fleet removes " << id
                           << " (only this ship is freed)\n";
-                ships_.erase(it);               // unique_ptr dtor frees the ship
+                ships_.erase(it);             
                 return;
             }
         }
@@ -356,7 +341,7 @@ public:
     void renderAll() const {
         std::cout << "Fleet '" << name_ << "' roster ("
                   << ships_.size() << ") ---\n";
-        for (const auto& ship : ships_) ship->render();  // polymorphic render()
+        for (const auto& ship : ships_) ship->render();  
     }
 
     void tickAll() const {
@@ -375,7 +360,6 @@ private:
     std::string name_;
     std::vector<std::unique_ptr<Spacecraft>> ships_;   
 };
-
 
 //  PART 3 - CargoHold: a resource-owning class the HARD way (Rule of 5)
 
@@ -446,9 +430,7 @@ private:
     std::size_t size_;
 };
 
-
 //  PART 4 - ModernCargoHold: the SAME job with the Rule of 0
-
 
 //  std::vector already owns its heap buffer and already implements correct
 //  destruction, deep copy, and move.
@@ -467,21 +449,7 @@ private:
     std::vector<int> ids_;   // self-managing -> Rule of 0
 };
 
-
 //  PART 2 - Slicing note 
-
-//
-//  If we stored modules by value, e.g.:
-//        std::vector<Module> bay;
-//        bay.push_back(Engine("E1", 50, 900));   // <-- SLICING
-//  only the Module sub-object is copied into the vector; the Engine-specific
-//  data and the Engine override are lost, and activate() would call the base
-//  version. We avoid slicing by storing modules/ships ONLY through pointers
-//  (Module*, unique_ptr<Spacecraft>), so the dynamic type is preserved and
-//  virtual dispatch works.
-
-
-
 //  Demonstration - mini mission loop
 
 int main() {
@@ -491,7 +459,7 @@ int main() {
     std::unique_ptr<Module> shield = std::make_unique<Shield>("Aegis-Mk1", 30, 60);
 
     std::cout << "\n BUILD FLEET (Part 1 + 2 + 4) \n";
-    // The shared multiplayer mission. It outlives any single ship.
+
     Fleet fleet("Orion-Sector");
 
     // Ownership transferred into the fleet via std::move (Part 4).
@@ -501,7 +469,7 @@ int main() {
     std::cout << "\n roster after build \n";
     fleet.renderAll();
 
-    // ----- PART 1 aggregation: form the relationship (non-owning attach) -----
+    // PART 1 aggregation: form the relationship (non-owning attach) 
     // Each ship holds only a NON-owning Module*; a module can be detached,
     // swapped, or salvaged without affecting the ship.
     std::cout << "\n MOUNT MODULES (Part 1 aggregation) \n";
@@ -526,9 +494,9 @@ int main() {
     for (const std::string& id : dockOrder) {
         try {
             if (Spacecraft* s = fleet.find(id))
-                s->dock(40);   // Borealis has only 20 fuel -> throws
+                s->dock(40);   
         } catch (const DockingException& e) {
-            // Caught at a sensible boundary; the loop (the simulation) continues.
+            
             std::cout << "  [caught] " << e.what() << " -- simulation continues\n";
         }
     }
@@ -541,7 +509,7 @@ int main() {
         std::cout << "  a buffer=" << a.data() << "  b buffer=" << b.data()
                   << "  (different => independent deep copy)\n";
 
-        CargoHold c = std::move(a); // (4) move ctor -> c steals, a becomes empty
+        CargoHold c = std::move(a); 
         std::cout << "  after move-ctor: c.size=" << c.size()
                   << "  a.empty=" << std::boolalpha << a.empty() << "\n";
 
