@@ -1,16 +1,44 @@
-// Fleet Systems: Lifecycles & Ownership
-// TC1030.302 - Object-Oriented Programming
-// Sebastian Villegas Olaya
-// Build: g++ -std=c++14 main.cpp -o fleet
+
+//  Fleet Systems: Lifecycles & Ownership
+//  TC1030.302 - Object-Oriented Programming
+//  Tecnologico de Monterrey, Campus Queretaro
+//  Sebastian Villegas Olaya  (A01714719)
+//
+//  Build:  g++ -std=c++14 main.cpp -o fleet
+//  Run:    ./fleet
+//
+//  This single file implements the full relationship matrix:
+//    Entity     -> Inheritance (IS-A)        : Spacecraft : public Entity
+//    FuelTank   -> Composition (HAS-A)        : member by value
+//    Telemetry  -> Composition (HAS-A)        : member by value
+//    Fleet      -> Aggregation (HAS-A)        : non-owning back-pointer Fleet*
+//    Module     -> Aggregation (HAS-A)        : non-owning pointer to base Module*
+//    Maneuver   -> Dependency (USES-A)        : passed as a method parameter
+//
+//  Plus: Rule of 5 (CargoHold), Rule of 0 (ModernCargoHold),
+//        unique_ptr fleet ownership, custom exception + RAII.
+
 
 #include <iostream>
 #include <string>
+#include <vector>
+#include <memory>     // std::unique_ptr, std::make_unique
+#include <stdexcept>  // std::runtime_error
+#include <utility>    // std::move
 
-// Entity: base class for anything the mission display can track.
-// The destructor is VIRTUAL: Spacecraft objects will be handled through
-// Entity*/Spacecraft* pointers later, and deleting a derived object
-// through a base pointer with a non-virtual destructor is undefined
-// behavior (the derived part would never be destroyed).
+// Forward declaration: Spacecraft only needs to *point* to a Fleet,
+// so the full definition is not required yet (a pointer is enough).
+class Fleet;
+
+
+//  PART 2 - Inheritance base class
+
+//  Entity is the generic "trackable thing" the mission display renders.
+//  Its destructor is VIRTUAL on purpose: Spacecraft objects are owned and
+//  deleted through base-class handles (Entity* / unique_ptr<Spacecraft>).
+//  Deleting a derived object through a base pointer whose destructor is NOT
+//  virtual is undefined behavior - only ~Entity() would run and the
+//  Spacecraft part (and its members) would leak.
 
 class Entity {
 public:
@@ -22,59 +50,538 @@ public:
         std::cout << "[dtor] Entity      " << id_ << "\n";
     }
 
-    // Read-only access to the identifier; the field itself stays private.
     const std::string& id() const { return id_; }
 
-    // Generic rendering; derived entities can specialize it.
+    // Polymorphic hook: the map calls render() through an Entity handle and
+    // the correct override runs at runtime.
     virtual void render() const {
         std::cout << "Tracking entity " << id_ << " on the mission map\n";
     }
 
 private:
-    std::string id_;
+    std::string id_;   // private: no external poking, exposed read-only via id()
 };
 
 
-// Spacecraft IS-A Entity (inheritance).
-// The mission display can treat any Spacecraft as a generic trackable
-// Entity, so public inheritance models the IS-A relationship.
+//  PART 1 - Composition members (HAS-A, by value)
+
+//  FuelTank and Telemetry are embedded directly inside Spacecraft *by value*.
+//  They are born when the ship is born and die when the ship dies: their
+//  lifetime is bound to the enclosing object. That is exactly composition.
+
+class FuelTank {
+public:
+    explicit FuelTank(int fuel) : fuel_(fuel) {
+        std::cout << "[ctor]  FuelTank   (fuel=" << fuel_ << ")\n";
+    }
+    ~FuelTank() {
+        std::cout << "[dtor]  FuelTank\n";
+    }
+
+    int  level() const { return fuel_; }
+    bool consume(int amount) {
+        if (amount > fuel_) return false;
+        fuel_ -= amount;
+        return true;
+    }
+
+private:
+    int fuel_;
+};
+
+
+class Telemetry {
+public:
+    Telemetry() {
+        std::cout << "[ctor]  Telemetry  (black box online)\n";
+    }
+    ~Telemetry() {
+        std::cout << "[dtor]  Telemetry  (" << events_.size() << " events recorded)\n";
+    }
+
+    void record(const std::string& event) { events_.push_back(event); }
+
+private:
+    // std::vector manages its own memory (Rule of 0): Telemetry needs no
+    // special members of its own.
+    std::vector<std::string> events_;
+};
+
+//  PART 2 - Module hierarchy (polymorphism + virtual destructor)
+
+
+//  Module is the base for detachable equipment. The Spacecraft holds a
+//  pointer-to-base (Module*) so it can mount ANY derived module at runtime
+//  and call activate() polymorphically.
+//
+
+class Module {
+public:
+    Module(const std::string& name, int powerDraw)
+        : name_(name), powerDraw_(powerDraw) {
+        std::cout << "[ctor]   Module    " << name_ << "\n";
+    }
+
+    virtual ~Module() {
+        std::cout << "[dtor]   Module    " << name_ << "\n";
+    }
+
+    // Generic behavior; derived classes specialize it.
+    virtual void activate() const {
+        std::cout << "Module " << name_ << " powers on (generic)\n";
+    }
+
+    const std::string& name() const { return name_; }
+    int powerDraw() const { return powerDraw_; }
+
+protected:
+    std::string name_;   // protected: derived classes legitimately read these
+    int         powerDraw_;
+};
+
+
+//  Engine / Shield are leaf classes -> marked `final` to seal the hierarchy.
+//  Each forwards to Module's constructor via the member-initializer list and
+//  overrides activate() (marked `override` so the compiler verifies the
+//  signature actually matches a virtual in the base).
+
+class Engine final : public Module {
+public:
+    Engine(const std::string& name, int powerDraw, int thrust)
+        : Module(name, powerDraw),   // forward to base ctor
+          thrust_(thrust) {
+        std::cout << "[ctor]   Engine    " << name_ << "\n";
+    }
+    // ~Engine runs BEFORE ~Module when deleted through a Module* (virtual dtor).
+    ~Engine() override {
+        std::cout << "[dtor]   Engine    " << name_ << "\n";
+    }
+
+    void activate() const override {
+        std::cout << "Engine " << name_ << " ignites: thrust=" << thrust_
+                  << "kN, draw=" << powerDraw_ << "\n";
+    }
+
+private:
+    int thrust_;
+};
+
+
+class Shield final : public Module {
+public:
+    Shield(const std::string& name, int powerDraw, int absorption)
+        : Module(name, powerDraw),
+          absorption_(absorption) {
+        std::cout << "[ctor]   Shield    " << name_ << "\n";
+    }
+    ~Shield() override {
+        std::cout << "[dtor]   Shield    " << name_ << "\n";
+    }
+
+    void activate() const override {
+        std::cout << "Shield " << name_ << " raises: absorbs " << absorption_
+                  << "% damage, draw=" << powerDraw_ << "\n";
+    }
+
+private:
+    int absorption_;
+};
+
+//  PART 1 - Dependency (USES-A)
+
+//  A Maneuver is a one-shot flight command. The ship does NOT store it: it is
+//  passed into a method, used during the tick, and then it vanishes. The only
+//  coupling is "Spacecraft::executeManeuver USES a Maneuver", i.e. dependency.
+
+class Maneuver {
+public:
+    Maneuver(const std::string& name, int fuelCost)
+        : name_(name), fuelCost_(fuelCost) {}
+
+    const std::string& name() const { return name_; }
+    int fuelCost() const { return fuelCost_; }
+
+private:
+    std::string name_;
+    int fuelCost_;
+};
+
+
+//  PART 5 - Exception type + RAII resource
+
+//  DockingException derives from std::runtime_error so it carries a message
+//  and is catchable as std::exception at a sensible boundary.
+//
+class DockingException : public std::runtime_error {
+public:
+    explicit DockingException(const std::string& msg)
+        : std::runtime_error(msg) {}
+};
+
+
+class DockingClamp {
+public:
+    explicit DockingClamp(const std::string& owner) : owner_(owner) {
+        std::cout << "    [RAII] clamp engaged for " << owner_ << "\n";
+    }
+    ~DockingClamp() {
+        std::cout << "    [RAII] clamp released for " << owner_
+                  << " (runs even if an exception was thrown)\n";
+    }
+private:
+    std::string owner_;
+};
+
+//  PART 1 + 2 - Spacecraft (the protagonist)
+
+//  Relationships gathered in one class:
+//    - IS-A Entity                 (public inheritance)
+//    - HAS-A FuelTank   by value   (composition)
+//    - HAS-A Telemetry  by value   (composition)
+//    - HAS-A Fleet*     non-owning (aggregation: ship may leave; fleet survives)
+//    - HAS-A Module*    non-owning (aggregation: equipment swappable/salvageable)
+//    - USES  Maneuver   parameter  (dependency)
 
 class Spacecraft : public Entity {
 public:
-    Spacecraft(const std::string& id, int hullIntegrity)
-        : Entity(id),                                    // base subobject is constructed FIRST
+    Spacecraft(const std::string& id, int hullIntegrity, int fuel)
+        : Entity(id),                 
+          fuel_(fuel),                
+          telemetry_(),               
+          fleet_(nullptr),            
+          module_(nullptr),           
           hullIntegrity_(hullIntegrity) {
         std::cout << "[ctor] Spacecraft  " << this->id() << "\n";
     }
 
     ~Spacecraft() override {
         std::cout << "[dtor] Spacecraft  " << this->id() << "\n";
-  // After this body runs, ~Entity() runs automatically:
-  // destruction order is the exact reverse of construction.
     }
 
     void render() const override {
-        std::cout << "Rendering spacecraft " << id()
-                  << " (hull " << hullIntegrity_ << "%)\n";
+        std::cout << "Spacecraft " << id() << " | hull " << hullIntegrity_
+                  << "% | fuel " << fuel_.level();
+        if (fleet_)  std::cout << " | in fleet";          // reads the aggregation back-pointer
+        if (module_) std::cout << " | module: " << module_->name();
+        std::cout << "\n";
     }
 
-    int hullIntegrity() const { return hullIntegrity_; }
+    // Aggregation wiring 
+    void joinFleet(Fleet* f) { fleet_ = f; }      
+    void mountModule(Module* m) {                 
+        module_ = m;
+        telemetry_.record("mounted module");
+    }
+
+    // Dependency: Maneuver is only a parameter 
+    void executeManeuver(const Maneuver& m) {
+        std::cout << "  " << id() << " executes maneuver '" << m.name() << "'\n";
+        if (!fuel_.consume(m.fuelCost()))
+            std::cout << "    (not enough fuel for full burn)\n";
+        telemetry_.record("maneuver: " + m.name());
+    }
+
+    // Polymorphic tick: activate whatever module is mounted 
+    void tick() const {
+        std::cout << "  tick " << id() << ": ";
+        if (module_) module_->activate();   
+        else         std::cout << "no module mounted\n";
+    }
+
+    // PART 5: a risky operation that can throw 
+    void dock(int requiredFuel) {
+        // Acquire RAII resource BEFORE the risky check (Part 5 requirement).
+        std::unique_ptr<DockingClamp> clamp =
+            std::make_unique<DockingClamp>(id());
+
+        std::cout << "  " << id() << " attempting dock (needs " << requiredFuel
+                  << " fuel, has " << fuel_.level() << ")\n";
+
+        if (fuel_.level() < requiredFuel) {
+            // Throwing here unwinds the stack: `clamp` is released cleanly.
+            throw DockingException(id() + ": insufficient fuel to dock");
+        }
+        fuel_.consume(requiredFuel);
+        std::cout << "  " << id() << " docked successfully\n";
+        // clamp released here on the normal path too.
+    }
 
 private:
-    int hullIntegrity_;
+    // the predicted construction order exact.
+    FuelTank  fuel_;        // composition 
+    Telemetry telemetry_;   // composition 
+    Fleet*    fleet_;       // aggregation
+    Module*   module_;      // aggregation 
+    int       hullIntegrity_;
 };
 
 
-// Demo (will grow into the full mission loop in later commits)
+
+//  PART 4 - Fleet owns its ships through unique_ptr (Rule of 0 container)
+
+
+//  WHY unique_ptr<Spacecraft>:
+//    - raw pointer  : we would have to delete manually and risk leaks/double
+//                     frees on exceptions. unique_ptr frees automatically.
+//    - shared_ptr   : there is exactly ONE owner of each ship (the Fleet), so
+//                     reference counting is wasted overhead. Ownership is
+//                     unique -> unique_ptr expresses the intent exactly.
+
+class Fleet {
+public:
+    explicit Fleet(const std::string& name) : name_(name) {
+        std::cout << "[ctor] Fleet       " << name_ << "\n";
+    }
+    ~Fleet() {
+        std::cout << "[dtor] Fleet       " << name_
+                  << " (releasing " << ships_.size() << " ship(s))\n";
+    }
+
+    void addShip(std::unique_ptr<Spacecraft> ship) {
+        ship->joinFleet(this);                  
+        ships_.push_back(std::move(ship));      
+    }
+
+    // Frees ONLY the matching ship; Fleet + other ships survive.
+    void removeShip(const std::string& id) {
+        for (auto it = ships_.begin(); it != ships_.end(); ++it) {
+            if ((*it)->id() == id) {
+                std::cout << "Fleet removes " << id
+                          << " (only this ship is freed)\n";
+                ships_.erase(it);               // unique_ptr dtor frees the ship
+                return;
+            }
+        }
+    }
+
+    void renderAll() const {
+        std::cout << "Fleet '" << name_ << "' roster ("
+                  << ships_.size() << ") ---\n";
+        for (const auto& ship : ships_) ship->render();  // polymorphic render()
+    }
+
+    void tickAll() const {
+        for (const auto& ship : ships_) ship->tick();
+    }
+
+    Spacecraft* find(const std::string& id) const {
+        for (const auto& ship : ships_)
+            if (ship->id() == id) return ship.get();
+        return nullptr;
+    }
+
+    std::size_t size() const { return ships_.size(); }
+
+private:
+    std::string name_;
+    std::vector<std::unique_ptr<Spacecraft>> ships_;   
+};
+
+
+//  PART 3 - CargoHold: a resource-owning class the HARD way (Rule of 5)
+
+//  CargoHold owns a raw heap array (int*). Because it manages a raw resource,
+//  the compiler-generated copy/move would only copy the POINTER (shallow),
+//  causing double-free. So we implement all five special members by hand.
+
+class CargoHold {
+public:
+    explicit CargoHold(std::size_t size)
+        : cargoIds_(new int[size]), size_(size) {
+        for (std::size_t i = 0; i < size_; ++i) cargoIds_[i] = static_cast<int>(i + 1);
+        std::cout << "  CargoHold ctor   (size " << size_ << ", buffer " << cargoIds_ << ")\n";
+    }
+
+    // 1) Destructor
+    ~CargoHold() {
+        std::cout << "  CargoHold dtor   (buffer " << cargoIds_ << ")\n";
+        delete[] cargoIds_;
+    }
+
+    // 2) Copy constructor - DEEP copy (independent buffer)
+    CargoHold(const CargoHold& other)
+        : cargoIds_(new int[other.size_]), size_(other.size_) {
+        for (std::size_t i = 0; i < size_; ++i) cargoIds_[i] = other.cargoIds_[i];
+        std::cout << "  CargoHold copy   (new buffer " << cargoIds_
+                  << " from " << other.cargoIds_ << ")\n";
+    }
+
+    // 3) Copy assignment - self-assignment guard + release old buffer
+    CargoHold& operator=(const CargoHold& other) {
+        if (this == &other) return *this;            
+        int* tmp = new int[other.size_];             
+        for (std::size_t i = 0; i < other.size_; ++i) tmp[i] = other.cargoIds_[i];
+        delete[] cargoIds_;                          
+        cargoIds_ = tmp;
+        size_     = other.size_;
+        std::cout << "  CargoHold copy=  (buffer now " << cargoIds_ << ")\n";
+        return *this;
+    }
+
+    // 4) Move constructor - steal pointer, null the source (noexcept)
+    CargoHold(CargoHold&& other) noexcept
+        : cargoIds_(other.cargoIds_), size_(other.size_) {
+        other.cargoIds_ = nullptr;                   
+        other.size_     = 0;
+        std::cout << "  CargoHold move   (stole buffer " << cargoIds_ << ")\n";
+    }
+
+    // 5) Move assignment - release old, steal, null source (noexcept)
+    CargoHold& operator=(CargoHold&& other) noexcept {
+        if (this == &other) return *this;
+        delete[] cargoIds_;                          
+        cargoIds_ = other.cargoIds_;                 
+        size_     = other.size_;
+        other.cargoIds_ = nullptr;                   
+        other.size_     = 0;
+        std::cout << "  CargoHold move=  (buffer now " << cargoIds_ << ")\n";
+        return *this;
+    }
+
+    std::size_t size()  const { return size_; }
+    bool        empty() const { return cargoIds_ == nullptr || size_ == 0; }
+    const int*  data()  const { return cargoIds_; }   // for the proof print
+
+private:
+    int*        cargoIds_;   
+    std::size_t size_;
+};
+
+
+//  PART 4 - ModernCargoHold: the SAME job with the Rule of 0
+
+
+//  std::vector already owns its heap buffer and already implements correct
+//  destruction, deep copy, and move.
+
+class ModernCargoHold {
+public:
+    explicit ModernCargoHold(std::size_t size) {
+        for (std::size_t i = 0; i < size; ++i) ids_.push_back(static_cast<int>(i + 1));
+    }
+    // No destructor, no copy/move ctor, no copy/move assignment. Not needed.
+
+    std::size_t size()  const { return ids_.size(); }
+    bool        empty() const { return ids_.empty(); }
+
+private:
+    std::vector<int> ids_;   // self-managing -> Rule of 0
+};
+
+
+//  PART 2 - Slicing note 
+
+//
+//  If we stored modules by value, e.g.:
+//        std::vector<Module> bay;
+//        bay.push_back(Engine("E1", 50, 900));   // <-- SLICING
+//  only the Module sub-object is copied into the vector; the Engine-specific
+//  data and the Engine override are lost, and activate() would call the base
+//  version. We avoid slicing by storing modules/ships ONLY through pointers
+//  (Module*, unique_ptr<Spacecraft>), so the dynamic type is preserved and
+//  virtual dispatch works.
+
+
+
+//  Demonstration - mini mission loop
 
 int main() {
-    std::cout << "Fleet Systems: bootstrap\n";
+  
+    std::cout << "PREP MODULES (Part 1 aggregation)\n";
+    std::unique_ptr<Module> engine = std::make_unique<Engine>("Ion-Drive", 50, 900);
+    std::unique_ptr<Module> shield = std::make_unique<Shield>("Aegis-Mk1", 30, 60);
 
-    Spacecraft ship("Aurora-01", 100);
-    ship.render();
+    std::cout << "\n BUILD FLEET (Part 1 + 2 + 4) \n";
+    // The shared multiplayer mission. It outlives any single ship.
+    Fleet fleet("Orion-Sector");
 
-    std::cout << "Shutting down\n";
+    // Ownership transferred into the fleet via std::move (Part 4).
+    fleet.addShip(std::make_unique<Spacecraft>("Aurora-01", 100, 80));
+    fleet.addShip(std::make_unique<Spacecraft>("Borealis-02", 100, 20));
+
+    std::cout << "\n roster after build \n";
+    fleet.renderAll();
+
+    // ----- PART 1 aggregation: form the relationship (non-owning attach) -----
+    // Each ship holds only a NON-owning Module*; a module can be detached,
+    // swapped, or salvaged without affecting the ship.
+    std::cout << "\n MOUNT MODULES (Part 1 aggregation) \n";
+    if (Spacecraft* a = fleet.find("Aurora-01"))
+        a->mountModule(engine.get());     
+    if (Spacecraft* b = fleet.find("Borealis-02"))
+        b->mountModule(shield.get());     
+
+    //PART 1 dependency: execute a transient Maneuver 
+    std::cout << "\nMANEUVER (Part 1 dependency)\n";
+    if (Spacecraft* a = fleet.find("Aurora-01"))
+        a->executeManeuver(Maneuver("orbital-insertion", 10));  // temporary, vanishes
+
+    // PART 2 polymorphism: run a tick (virtual activate) 
+    // Same call through the base interface dispatches to TWO different overrides.
+    std::cout << " TICK (Part 2 polymorphism) \n";
+    fleet.tickAll();   
+
+    // PART 5 exception safety: dock() may throw, sim keeps running 
+    std::cout << "\n DOCK (Part 5 exceptions + RAII) \n";
+    std::vector<std::string> dockOrder = { "Aurora-01", "Borealis-02" };
+    for (const std::string& id : dockOrder) {
+        try {
+            if (Spacecraft* s = fleet.find(id))
+                s->dock(40);   // Borealis has only 20 fuel -> throws
+        } catch (const DockingException& e) {
+            // Caught at a sensible boundary; the loop (the simulation) continues.
+            std::cout << "  [caught] " << e.what() << " -- simulation continues\n";
+        }
+    }
+
+    // PART 3 Rule of 5: exercise ALL FIVE special members 
+    std::cout << "\n CARGO: RULE OF 5 (Part 3)\n";
+    {
+        CargoHold a(3);
+        CargoHold b = a;           
+        std::cout << "  a buffer=" << a.data() << "  b buffer=" << b.data()
+                  << "  (different => independent deep copy)\n";
+
+        CargoHold c = std::move(a); // (4) move ctor -> c steals, a becomes empty
+        std::cout << "  after move-ctor: c.size=" << c.size()
+                  << "  a.empty=" << std::boolalpha << a.empty() << "\n";
+
+        CargoHold d(5);
+        d = b;                      
+        std::cout << "  after copy-assign: d.size=" << d.size()
+                  << "  (old size-5 buffer released, deep-copied from b)\n";
+
+        CargoHold* alias = &d;      
+        d = *alias;                 
+        std::cout << "  after self-assign: d buffer=" << d.data()
+                  << " (unchanged -> self-assignment guard works)\n";
+
+        CargoHold e(2);
+        e = std::move(b);           
+        std::cout << "  after move-assign: e.size=" << e.size()
+                  << "  b.empty=" << b.empty()
+                  << "  (no leak, no double-free)\n";
+    } 
+    //  PART 4 Rule of 0: same behavior, zero boilerplate 
+    std::cout << "\n CARGO: RULE OF 0 (Part 4) \n";
+    {
+        ModernCargoHold m(3);
+        ModernCargoHold copy = m;          
+        ModernCargoHold moved = std::move(m);
+        std::cout << "  copy.size=" << copy.size()
+                  << "  moved.size=" << moved.size()
+                  << "  m.empty=" << m.empty()
+                  << "  (no special members written - Rule of 0)\n";
+    }
+
+    // PART 4 survivability: destroy one ship, fleet survives 
+    std::cout << "\n DESTROY ONE SHIP (Part 4 survival) \n";
+    fleet.removeShip("Borealis-02");   // frees ONLY Borealis (its Shield survives)
+    std::cout << "Fleet still has " << fleet.size() << " ship(s); Borealis' Shield '"
+              << shield->name() << "' is still alive (aggregation):\n";
+    fleet.renderAll();
+
+    std::cout << "\nSHUTDOWN (teardown order)\n";
     return 0;
-// 'ship' goes out of scope here:
-// ~Spacecraft() runs first, then ~Entity() (derived-first destruction).
+
 }
