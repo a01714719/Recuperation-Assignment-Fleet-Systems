@@ -3,7 +3,6 @@ Fleet Systems: Lifecycles & Ownership
 TC1030.302 Object-Oriented Programming
 Sebastian Villegas Olaya · A01714719
 
-
 Build & run
 
 g++ -std=c++14 main.cpp -o fleet
@@ -12,8 +11,6 @@ g++ -std=c++14 main.cpp -o fleet
 I also built it with -Wall -Wextra -Wpedantic and it compiles with no warnings.
 
 Part 1: Relationships and ownership
-
-System / ObjectRelationshipC++ member declarationWhy this ownershipEntityInheritance (IS-A)class Spacecraft : public EntityA spacecraft is a trackable entity, so the map can render it through an Entity handle.FuelTankComposition (HAS-A)FuelTank fuel_; (by value)Internal resource. It's born and dies with the ship, so its lifetime is tied to the ship.TelemetryComposition (HAS-A)Telemetry telemetry_; (by value)The black box. Same deal: it dies with the ship and has no life of its own.FleetAggregation (HAS-A)Fleet* fleet_; (non-owning)The ship points at the shared mission but doesn't own it. If the ship dies, the Fleet stays.ModuleAggregation (HAS-A)Module* module_; (non-owning, pointer to base)Equipment can be detached, swapped or salvaged, so its lifetime is independent of the ship.ManeuverDependency (USES-A)void executeManeuver(const Maneuver& m) (param)A one-shot command. It's only used during a tick and never stored.
 
 For the ships themselves, the Fleet owns them with
 std::vector<std::unique_ptr<Spacecraft>>. I went with unique_ptr instead of a
