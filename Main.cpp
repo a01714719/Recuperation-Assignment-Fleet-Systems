@@ -327,10 +327,6 @@ private:
 
 //  PART 3 - CargoHold: a resource-owning class the HARD way (Rule of 5)
 
-//  CargoHold owns a raw heap array (int*). Because it manages a raw resource,
-//  the compiler-generated copy/move would only copy the POINTER (shallow),
-//  causing double-free. So we implement all five special members by hand.
-
 class CargoHold {
 public:
     explicit CargoHold(std::size_t size)
@@ -387,7 +383,7 @@ public:
 
     std::size_t size()  const { return size_; }
     bool        empty() const { return cargoIds_ == nullptr || size_ == 0; }
-    const int*  data()  const { return cargoIds_; }   // for the proof print
+    const int*  data()  const { return cargoIds_; }   
 
 private:
     int*        cargoIds_;   
@@ -411,7 +407,6 @@ private:
 };
 
 //  PART 2 - Slicing note 
-//  Demonstration - mini mission loop
 
 int main() {
   
